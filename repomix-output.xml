@@ -1,0 +1,395 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+The content has been processed where line numbers have been added.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Line numbers have been added to the beginning of each line
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+hairstyle/
+  hairstyle.controller.ts
+  hairstyle.module.ts
+  hairstyle.service.ts
+app.module.ts
+main.ts
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="hairstyle/hairstyle.controller.ts">
+  1: import {
+  2:   BadRequestException,
+  3:   Controller,
+  4:   HttpStatus,
+  5:   Logger,
+  6:   Post,
+  7:   Res,
+  8:   StreamableFile,
+  9:   UploadedFiles,
+ 10:   UseInterceptors,
+ 11: } from '@nestjs/common';
+ 12: import { FileFieldsInterceptor } from '@nestjs/platform-express';
+ 13: import type { Response } from 'express';
+ 14: import type { HairstyleTryOnResult } from './hairstyle.service';
+ 15: import { HairstyleService } from './hairstyle.service';
+ 16: 
+ 17: type HairstyleUploadFiles = {
+ 18:   sourceImage?: Express.Multer.File[];
+ 19:   referenceImage?: Express.Multer.File[];
+ 20: };
+ 21: 
+ 22: const MAX_IMAGE_SIZE =
+ 23:   Math.max(1, Number(process.env.MAX_IMAGE_SIZE_MB || 10)) * 1024 * 1024;
+ 24: 
+ 25: const ALLOWED_IMAGE_TYPES = new Set([
+ 26:   'image/jpeg',
+ 27:   'image/png',
+ 28:   'image/webp',
+ 29: ]);
+ 30: 
+ 31: @Controller('hairstyles')
+ 32: export class HairstyleController {
+ 33:   private readonly logger = new Logger(HairstyleController.name);
+ 34: 
+ 35:   constructor(private readonly hairstyleService: HairstyleService) {}
+ 36: 
+ 37:   /**
+ 38:    * POST /api/hairstyles/try-on
+ 39:    * Multipart fields:
+ 40:    * - sourceImage: original portrait/person to preserve
+ 41:    * - referenceImage: image whose hairstyle should be transferred
+ 42:    *
+ 43:    * No authentication is required in this standalone project.
+ 44:    */
+ 45:   @Post('try-on')
+ 46:   @UseInterceptors(
+ 47:     FileFieldsInterceptor(
+ 48:       [
+ 49:         { name: 'sourceImage', maxCount: 1 },
+ 50:         { name: 'referenceImage', maxCount: 1 },
+ 51:       ],
+ 52:       {
+ 53:         limits: {
+ 54:           fileSize: MAX_IMAGE_SIZE,
+ 55:           files: 2,
+ 56:         },
+ 57:       },
+ 58:     ),
+ 59:   )
+ 60:   async tryOnHairstyle(
+ 61:     @UploadedFiles() files: HairstyleUploadFiles,
+ 62:     @Res({ passthrough: true }) response: Response,
+ 63:   ): Promise<StreamableFile> {
+ 64:     const sourceImage = files?.sourceImage?.[0];
+ 65:     const referenceImage = files?.referenceImage?.[0];
+ 66: 
+ 67:     if (!sourceImage || !referenceImage) {
+ 68:       throw new BadRequestException(
+ 69:         'Both sourceImage and referenceImage are required.',
+ 70:       );
+ 71:     }
+ 72: 
+ 73:     for (const file of [sourceImage, referenceImage]) {
+ 74:       if (!ALLOWED_IMAGE_TYPES.has(file.mimetype)) {
+ 75:         throw new BadRequestException(
+ 76:           'Only JPEG, PNG and WebP images are supported.',
+ 77:         );
+ 78:       }
+ 79: 
+ 80:       if (!file.buffer?.length || file.size > MAX_IMAGE_SIZE) {
+ 81:         throw new BadRequestException(
+ 82:           `Each image must be smaller than ${Math.floor(MAX_IMAGE_SIZE / 1024 / 1024)} MB.`,
+ 83:         );
+ 84:       }
+ 85:     }
+ 86: 
+ 87:     this.logger.log(
+ 88:       `Try-on request: source=${sourceImage.size} bytes, reference=${referenceImage.size} bytes`,
+ 89:     );
+ 90: 
+ 91:     const result: HairstyleTryOnResult =
+ 92:       await this.hairstyleService.tryOn(sourceImage, referenceImage);
+ 93: 
+ 94:     response.setHeader('Content-Type', result.mimeType);
+ 95:     response.setHeader(
+ 96:       'Content-Disposition',
+ 97:       `inline; filename="${result.fileName}"`,
+ 98:     );
+ 99:     response.setHeader('Content-Length', String(result.buffer.length));
+100:     response.setHeader('Cache-Control', 'no-store');
+101:     response.setHeader('X-AI-Model', result.model);
+102: 
+103:     return new StreamableFile(result.buffer, {
+104:       type: result.mimeType,
+105:       disposition: `inline; filename="${result.fileName}"`,
+106:       length: result.buffer.length,
+107:     });
+108:   }
+109: }
+</file>
+
+<file path="hairstyle/hairstyle.module.ts">
+1: import { Module } from '@nestjs/common';
+2: import { HairstyleController } from './hairstyle.controller';
+3: import { HairstyleService } from './hairstyle.service';
+4: 
+5: @Module({
+6:   controllers: [HairstyleController],
+7:   providers: [HairstyleService],
+8: })
+9: export class HairstyleModule {}
+</file>
+
+<file path="hairstyle/hairstyle.service.ts">
+  1: import { GoogleGenerativeAI } from '@google/generative-ai';
+  2: import {
+  3:   BadGatewayException,
+  4:   Injectable,
+  5:   InternalServerErrorException,
+  6:   Logger,
+  7:   ServiceUnavailableException,
+  8: } from '@nestjs/common';
+  9: import type { Express } from 'express';
+ 10: 
+ 11: const DEFAULT_IMAGE_MODEL = 'gemini-2.5-flash-image';
+ 12: 
+ 13: export type HairstyleTryOnResult = {
+ 14:   model: string;
+ 15:   mimeType: string;
+ 16:   fileName: string;
+ 17:   buffer: Buffer;
+ 18: };
+ 19: 
+ 20: @Injectable()
+ 21: export class HairstyleService {
+ 22:   private readonly logger = new Logger(HairstyleService.name);
+ 23: 
+ 24:   async tryOn(
+ 25:     sourceImage: Express.Multer.File,
+ 26:     referenceImage: Express.Multer.File,
+ 27:   ): Promise<HairstyleTryOnResult> {
+ 28:     const apiKey = process.env.GEMINI_API_KEY;
+ 29:     if (!apiKey) {
+ 30:       throw new ServiceUnavailableException(
+ 31:         'GEMINI_API_KEY is missing. Configure it in your .env file.',
+ 32:       );
+ 33:     }
+ 34: 
+ 35:     const modelName =
+ 36:       process.env.GEMINI_IMAGE_MODEL || DEFAULT_IMAGE_MODEL;
+ 37: 
+ 38:     try {
+ 39:       const genAI = new GoogleGenerativeAI(apiKey);
+ 40:       const model = genAI.getGenerativeModel({
+ 41:         model: modelName,
+ 42:         // The installed @google/generative-ai type definition may not include
+ 43:         // responseModalities, while the Gemini API accepts it at runtime.
+ 44:         generationConfig: {
+ 45:           responseModalities: ['IMAGE', 'TEXT'],
+ 46:         } as any,
+ 47:       });
+ 48: 
+ 49:       // Explicit role mapping:
+ 50:       // Image 1 is the identity/target image.
+ 51:       // Image 2 is only the hairstyle reference.
+ 52:       const prompt = `
+ 53: Perform a photorealistic hairstyle transfer.
+ 54: 
+ 55: INPUT IMAGE ROLES:
+ 56: - IMAGE 1 is the original person and the target image to edit.
+ 57: - IMAGE 2 is a hairstyle reference only.
+ 58: 
+ 59: REQUIRED OUTPUT:
+ 60: Create one complete, realistic portrait of the person from IMAGE 1,
+ 61: with the hairstyle from IMAGE 2 applied to them.
+ 62: The final result must be IMAGE 1's person/face + IMAGE 2's hairstyle.
+ 63: 
+ 64: PRESERVE IMAGE 1:
+ 65: - Keep the identity and facial appearance of IMAGE 1.
+ 66: - Preserve eyes, eyebrows, nose, lips, jawline, cheeks, ears, skin tone,
+ 67:   expression, makeup and apparent age.
+ 68: - Preserve the original pose, camera angle, crop, framing, clothing,
+ 69:   accessories, background and lighting.
+ 70: - Do not copy or blend the face, identity, skin or makeup from IMAGE 2.
+ 71: 
+ 72: TRANSFER ONLY THE HAIR FROM IMAGE 2:
+ 73: - Match its haircut, length, silhouette, layers, fringe/bangs, parting,
+ 74:   volume, texture and hair color as closely as possible.
+ 75: - Adapt the hairstyle naturally to the head and hairline of IMAGE 1.
+ 76: - Create realistic hair strands, hairline, shadows and highlights.
+ 77: 
+ 78: IMAGE COMPLETENESS:
+ 79: - Return a complete full-frame portrait, not a close-up of the hair.
+ 80: - Keep the entire face visible, including forehead, eyes, nose, mouth and chin.
+ 81: - Do not crop, zoom, stretch, split, collage or create a before/after layout.
+ 82: - Do not leave blank, gray, white, transparent or unfinished areas.
+ 83: - Fill the full output canvas with the edited photograph.
+ 84: 
+ 85: Return exactly one finished edited image. Do not return explanatory text.
+ 86:       `.trim();
+ 87: 
+ 88:       const result = await model.generateContent([
+ 89:         {
+ 90:           inlineData: {
+ 91:             data: sourceImage.buffer.toString('base64'),
+ 92:             mimeType: sourceImage.mimetype,
+ 93:           },
+ 94:         },
+ 95:         {
+ 96:           inlineData: {
+ 97:             data: referenceImage.buffer.toString('base64'),
+ 98:             mimeType: referenceImage.mimetype,
+ 99:           },
+100:         },
+101:         { text: prompt },
+102:       ]);
+103: 
+104:       const candidate = result.response.candidates?.[0];
+105:       const parts = candidate?.content?.parts ?? [];
+106:       const imagePart = parts.find(
+107:         (part) => Boolean(part.inlineData?.data),
+108:       );
+109: 
+110:       if (!imagePart?.inlineData?.data) {
+111:         const modelText = parts
+112:           .map((part) => part.text)
+113:           .filter(Boolean)
+114:           .join('\n');
+115: 
+116:         this.logger.warn(
+117:           `Gemini returned no image. model=${modelName}, finishReason=${candidate?.finishReason || 'unknown'}, response=${modelText.slice(0, 500)}`,
+118:         );
+119: 
+120:         throw new BadGatewayException(
+121:           'Gemini did not return an image. Check the model response and try again.',
+122:         );
+123:       }
+124: 
+125:       const mimeType = imagePart.inlineData.mimeType || 'image/png';
+126:       if (!mimeType.startsWith('image/')) {
+127:         throw new BadGatewayException(
+128:           `Gemini returned an unsupported MIME type: ${mimeType}`,
+129:         );
+130:       }
+131: 
+132:       const buffer = Buffer.from(imagePart.inlineData.data, 'base64');
+133:       if (!buffer.length) {
+134:         throw new BadGatewayException('Gemini returned an empty image.');
+135:       }
+136: 
+137:       const extension = this.getFileExtension(mimeType);
+138: 
+139:       this.logger.log(
+140:         `Gemini image generated. model=${modelName}, mimeType=${mimeType}, bytes=${buffer.length}`,
+141:       );
+142: 
+143:       return {
+144:         model: modelName,
+145:         mimeType,
+146:         fileName: `hairstyle-result.${extension}`,
+147:         buffer,
+148:       };
+149:     } catch (error) {
+150:       if (
+151:         error instanceof BadGatewayException ||
+152:         error instanceof ServiceUnavailableException
+153:       ) {
+154:         throw error;
+155:       }
+156: 
+157:       const message = error instanceof Error ? error.message : String(error);
+158:       this.logger.error(
+159:         `Gemini hairstyle generation failed. model=${modelName}; ${message}`,
+160:         error instanceof Error ? error.stack : undefined,
+161:       );
+162: 
+163:       if (/429|quota|rate.?limit/i.test(message)) {
+164:         throw new ServiceUnavailableException(
+165:           'Gemini rate limit or quota exceeded. Please try again later.',
+166:         );
+167:       }
+168: 
+169:       throw new InternalServerErrorException(
+170:         'Failed to generate hairstyle image with Gemini.',
+171:       );
+172:     }
+173:   }
+174: 
+175:   private getFileExtension(mimeType: string): string {
+176:     switch (mimeType) {
+177:       case 'image/jpeg':
+178:         return 'jpg';
+179:       case 'image/webp':
+180:         return 'webp';
+181:       case 'image/png':
+182:       default:
+183:         return 'png';
+184:     }
+185:   }
+186: }
+</file>
+
+<file path="app.module.ts">
+1: import { Module } from '@nestjs/common';
+2: import { HairstyleModule } from './hairstyle/hairstyle.module';
+3: 
+4: @Module({
+5:   imports: [HairstyleModule],
+6: })
+7: export class AppModule {}
+</file>
+
+<file path="main.ts">
+ 1: import 'reflect-metadata';
+ 2: import { NestFactory } from '@nestjs/core';
+ 3: import { AppModule } from './app.module';
+ 4: 
+ 5: async function bootstrap() {
+ 6:   const app = await NestFactory.create(AppModule);
+ 7:   app.enableCors();
+ 8:   app.setGlobalPrefix('api');
+ 9:   const port = Number(process.env.PORT || 3000);
+10:   await app.listen(port, '0.0.0.0');
+11:   console.log(`Hairstyle API listening on http://localhost:${port}/api`);
+12: }
+13: bootstrap();
+</file>
+
+</files>
