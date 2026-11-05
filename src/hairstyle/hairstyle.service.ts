@@ -137,6 +137,57 @@ Return exactly one complete photorealistic edited image.
       const candidate = imageResult.response.candidates?.[0];
       const parts = candidate?.content?.parts ?? [];
 
+
+      
+const usage = imageResult.response.usageMetadata;
+
+const promptTokens = usage?.promptTokenCount ?? 0;
+const candidatesTokens = usage?.candidatesTokenCount ?? 0;
+const totalTokens = usage?.totalTokenCount ?? 0;
+
+// Gemini 3.1 Flash Image Standard pricing (USD / 1M tokens)
+const INPUT_PRICE_PER_MILLION = 0.5;
+const OUTPUT_TEXT_PRICE_PER_MILLION = 3;
+const OUTPUT_IMAGE_PRICE_PER_MILLION = 60;
+
+// Estimate input cost
+const inputCost =
+  (promptTokens / 1_000_000) * INPUT_PRICE_PER_MILLION;
+
+// Estimate image output cost.
+// Assumes candidatesTokensCount represents image output tokens.
+const outputImageCost =
+  (candidatesTokens / 1_000_000) * OUTPUT_IMAGE_PRICE_PER_MILLION;
+
+const totalEstimatedCost = inputCost + outputImageCost;
+
+const costLog = {
+  model: imageModelName,
+
+  usage: {
+    promptTokens,
+    candidatesTokens,
+    totalTokens,
+  },
+
+  pricing: {
+    inputPricePerMillion: INPUT_PRICE_PER_MILLION,
+    outputTextPricePerMillion: OUTPUT_TEXT_PRICE_PER_MILLION,
+    outputImagePricePerMillion: OUTPUT_IMAGE_PRICE_PER_MILLION,
+  },
+
+  cost: {
+    inputUsd: Number(inputCost.toFixed(8)),
+    outputImageUsd: Number(outputImageCost.toFixed(8)),
+    totalEstimatedUsd: Number(totalEstimatedCost.toFixed(8)),
+  },
+
+  timestamp: new Date().toISOString(),
+};
+
+console.log('[GEMINI_COST]', JSON.stringify(costLog));
+this.logger.log(`[GEMINI_COST] ${JSON.stringify(costLog)}`);
+
       const imagePart = parts.find(
         (part) => Boolean(part.inlineData?.data),
       );
