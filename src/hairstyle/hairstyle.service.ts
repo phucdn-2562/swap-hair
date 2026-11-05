@@ -1,3 +1,4 @@
+
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import {
   BadGatewayException,
@@ -7,10 +8,8 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { imageSize } from 'image-size';
-import type { Express } from 'express';
 
-const DEFAULT_IMAGE_MODEL = 'gemini-2.5-flash-image';
-const DEFAULT_ANALYSIS_MODEL = 'gemini-2.5-flash';
+const DEFAULT_IMAGE_MODEL = 'gemini-3.1-flash-image';
 
 export type HairstyleTryOnResult = {
   model: string;
@@ -27,7 +26,8 @@ export class HairstyleService {
     sourceImage: Express.Multer.File,
     referenceImage: Express.Multer.File,
   ): Promise<HairstyleTryOnResult> {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.GEMINI_API_KEY?.trim();
+
     if (!apiKey) {
       throw new ServiceUnavailableException(
         'GEMINI_API_KEY is missing. Configure it in your .env file.',
@@ -35,79 +35,25 @@ export class HairstyleService {
     }
 
     const imageModelName =
-      process.env.GEMINI_IMAGE_MODEL || DEFAULT_IMAGE_MODEL;
-    const analysisModelName =
-      process.env.GEMINI_ANALYSIS_MODEL || DEFAULT_ANALYSIS_MODEL;
+      process.env.GEMINI_IMAGE_MODEL?.trim() || DEFAULT_IMAGE_MODEL;
 
     try {
       const genAI = new GoogleGenerativeAI(apiKey);
 
-      // Read the source dimensions so the image model can preserve its framing.
-      let sourceDimensions = 'portrait orientation';
+      let sourceDimensions = 'same dimensions and aspect ratio as the source image';
+
       try {
         const dimensions = imageSize(sourceImage.buffer);
+
         if (dimensions.width && dimensions.height) {
           sourceDimensions =
-            `${dimensions.width}x${dimensions.height} pixels, ` +
-            `aspect ratio ${dimensions.width}:${dimensions.height}`;
+            `${dimensions.width}x${dimensions.height} pixels ` +
+            `(aspect ratio ${dimensions.width}:${dimensions.height})`;
         }
       } catch {
         this.logger.warn('Could not read source image dimensions.');
       }
 
-      // STAGE 1:
-      // Analyze ONLY the hairstyle in the reference image.
-      // The reference person's face is never passed to the image-generation call.
-      const analysisModel = genAI.getGenerativeModel({
-        model: analysisModelName,
-      });
-
-      const analysisResult = await analysisModel.generateContent([
-        {
-          inlineData: {
-            data: referenceImage.buffer.toString('base64'),
-            mimeType: referenceImage.mimetype,
-          },
-        },
-        {
-          text: `
-Analyze the hairstyle in this reference photo for a hairstyle-transfer task.
-
-Describe ONLY the hair. Do not describe the person's face, identity, age,
-skin, makeup, expression, clothing, or background.
-
-Include:
-- haircut and overall silhouette
-- hair length relative to shoulders/chest
-- parting and fringe/bangs
-- layers and face-framing strands
-- curl/wave pattern and texture
-- volume and shape around the sides and back
-- hair color and highlights
-
-Be concise but specific enough that another image model can recreate this
-hairstyle on a different person. Do not infer or mention the reference person's
-identity or facial characteristics.
-          `.trim(),
-        },
-      ]);
-
-      const hairstyleDescription =
-        analysisResult.response.text()?.trim();
-
-      if (!hairstyleDescription) {
-        throw new BadGatewayException(
-          'Gemini could not analyze the reference hairstyle. Please try another reference image.',
-        );
-      }
-
-      this.logger.log(
-        `Reference hairstyle analyzed using ${analysisModelName}: ${hairstyleDescription.slice(0, 350)}`,
-      );
-
-      // STAGE 2:
-      // The image model receives ONLY the original/source photo and a textual
-      // hairstyle description. It never sees the reference person's face.
       const imageModel = genAI.getGenerativeModel({
         model: imageModelName,
         generationConfig: {
@@ -115,43 +61,61 @@ identity or facial characteristics.
         } as any,
       });
 
-      const editPrompt = `
-Edit the provided source portrait. This is a localized hairstyle-change task.
+      const prompt = `
+Perform a precise hairstyle transfer using the TWO supplied images.
 
-THE PROVIDED IMAGE IS THE SOURCE PERSON AND THE ONLY IDENTITY SOURCE.
-Keep this exact person. Do not replace, reinterpret, beautify, or regenerate
-their face.
+IMAGE 1 — SOURCE PERSON:
+The first image is the base photograph and the ONLY source of the person's
+identity, face, body, pose, clothing, background and lighting.
 
-CHANGE ONLY THE HAIR to the following hairstyle:
-${hairstyleDescription}
+IMAGE 2 — TARGET HAIRSTYLE:
+The second image is the visual ground truth for the hairstyle. Copy its
+hairstyle as closely as possible. Do not use the second person's face or identity.
 
-IDENTITY PRESERVATION:
-- Preserve the source person's facial identity and facial geometry.
-- Keep their eyes, eyebrows, nose, lips, jawline, cheeks, ears, skin tone,
-  expression, makeup and apparent age unchanged.
-- Do not invent a new face or use another person's identity.
-- Do not alter the face to resemble a hairstyle reference model.
-- Keep the original head position and face proportions.
+TASK:
+Edit IMAGE 1 so that its person has the hairstyle shown in IMAGE 2.
+This is a hairstyle transfer, not a general restyling or a hairstyle inspired
+by the reference. Adapt the target hair to the source person's head shape,
+hairline, pose and camera perspective.
 
-PHOTO PRESERVATION:
-- Preserve the source photo's background, clothes, accessories, pose,
-  camera angle, lighting and composition.
-- Keep the same portrait orientation and aspect ratio as the source image
-  (${sourceDimensions}).
-- Keep the entire head and full face visible, including forehead, eyes,
-  nose, mouth, chin and jaw.
-- Do not zoom in, crop, stretch, rotate, or change the canvas orientation.
-- Fill the entire output canvas with a complete finished photograph.
-- No blank, gray, white, transparent, masked, or unfinished regions.
+MATCH IMAGE 2'S HAIR:
+- Overall haircut silhouette and outer contour.
+- Exact parting position and direction.
+- Fringe/bangs design, including the opening, separation and length.
+- Hair length relative to shoulders and chest.
+- Layer placement, layer lengths and face-framing strands.
+- Volume distribution at crown, temples and both sides.
+- Straightness, wave/curl pattern and strand texture.
+- Shape, direction and density of the hair ends.
+- Base hair color, undertone and highlights.
 
-HAIR REALISM:
-- Make the new hairstyle fit the source person's actual head shape and hairline.
-- Render natural hair strands, believable volume, shadows and highlights.
-- Keep the hair physically coherent around the forehead, temples, ears,
-  shoulders and neck.
+Do not preserve source-hair features that conflict with the target hairstyle.
+Do not simplify the target into a generic long layered haircut.
+Do not invent different bangs, extra curls, excessive volume or a different
+layer structure. Prioritize matching the reference silhouette and fringe.
 
-Return exactly one complete photorealistic edited image. Do not return a
-collage, split-screen, before/after comparison, or explanatory text.
+PRESERVE IMAGE 1'S IDENTITY:
+- Keep the exact same face and facial geometry from IMAGE 1.
+- Do not copy, blend or resemble the face in IMAGE 2.
+- Do not change eyes, eyebrows, nose, lips, jawline, cheeks, ears, skin tone,
+  expression, makeup or apparent age.
+- Do not beautify, regenerate or reinterpret the face.
+
+PRESERVE IMAGE 1'S PHOTOGRAPH:
+- Keep its background, clothing, accessories, pose, camera angle and lighting.
+- Keep the original framing and portrait orientation.
+- Keep the complete head and face visible.
+- Maintain the source dimensions/aspect ratio: ${sourceDimensions}.
+- Do not crop, zoom, stretch, rotate or change the canvas shape.
+- Do not add objects, text, borders, collages or comparison panels.
+
+REALISTIC HAIR INTEGRATION:
+- Fit the target hairstyle naturally to the source person's hairline and skull.
+- Render believable hair strands, edges, shadows, highlights and volume.
+- Make the hair connect naturally around the forehead, temples, ears, neck
+  and shoulders. Avoid wig-like edges or malformed strands.
+
+Return exactly one complete photorealistic edited image.
       `.trim();
 
       const imageResult = await imageModel.generateContent([
@@ -161,38 +125,101 @@ collage, split-screen, before/after comparison, or explanatory text.
             mimeType: sourceImage.mimetype,
           },
         },
-        { text: editPrompt },
+        {
+          inlineData: {
+            data: referenceImage.buffer.toString('base64'),
+            mimeType: referenceImage.mimetype,
+          },
+        },
+        { text: prompt },
       ]);
 
       const candidate = imageResult.response.candidates?.[0];
       const parts = candidate?.content?.parts ?? [];
+
+
+      
+const usage = imageResult.response.usageMetadata;
+
+const promptTokens = usage?.promptTokenCount ?? 0;
+const candidatesTokens = usage?.candidatesTokenCount ?? 0;
+const totalTokens = usage?.totalTokenCount ?? 0;
+
+// Gemini 3.1 Flash Image Standard pricing (USD / 1M tokens)
+const INPUT_PRICE_PER_MILLION = 0.5;
+const OUTPUT_TEXT_PRICE_PER_MILLION = 3;
+const OUTPUT_IMAGE_PRICE_PER_MILLION = 60;
+
+// Estimate input cost
+const inputCost =
+  (promptTokens / 1_000_000) * INPUT_PRICE_PER_MILLION;
+
+// Estimate image output cost.
+// Assumes candidatesTokensCount represents image output tokens.
+const outputImageCost =
+  (candidatesTokens / 1_000_000) * OUTPUT_IMAGE_PRICE_PER_MILLION;
+
+const totalEstimatedCost = inputCost + outputImageCost;
+
+const costLog = {
+  model: imageModelName,
+
+  usage: {
+    promptTokens,
+    candidatesTokens,
+    totalTokens,
+  },
+
+  pricing: {
+    inputPricePerMillion: INPUT_PRICE_PER_MILLION,
+    outputTextPricePerMillion: OUTPUT_TEXT_PRICE_PER_MILLION,
+    outputImagePricePerMillion: OUTPUT_IMAGE_PRICE_PER_MILLION,
+  },
+
+  cost: {
+    inputUsd: Number(inputCost.toFixed(8)),
+    outputImageUsd: Number(outputImageCost.toFixed(8)),
+    totalEstimatedUsd: Number(totalEstimatedCost.toFixed(8)),
+  },
+
+  timestamp: new Date().toISOString(),
+};
+
+console.log('[GEMINI_COST]', JSON.stringify(costLog));
+this.logger.log(`[GEMINI_COST] ${JSON.stringify(costLog)}`);
+
       const imagePart = parts.find(
         (part) => Boolean(part.inlineData?.data),
       );
 
       if (!imagePart?.inlineData?.data) {
-        const modelText = parts
+        const responseText = parts
           .map((part) => part.text)
           .filter(Boolean)
           .join('\n');
 
         this.logger.warn(
-          `Gemini returned no image. model=${imageModelName}, finishReason=${candidate?.finishReason || 'unknown'}, response=${modelText.slice(0, 500)}`,
+          `Gemini returned no image. model=${imageModelName}, finishReason=${candidate?.finishReason || 'unknown'}, response=${responseText.slice(0, 500)}`,
         );
 
         throw new BadGatewayException(
-          'Gemini did not return an edited image. Check the model response and try again.',
+          'Gemini did not return an edited image. Check model access and response.',
         );
       }
 
       const mimeType = imagePart.inlineData.mimeType || 'image/png';
+
       if (!mimeType.startsWith('image/')) {
         throw new BadGatewayException(
           `Gemini returned an unsupported MIME type: ${mimeType}`,
         );
       }
 
-      const buffer = Buffer.from(imagePart.inlineData.data, 'base64');
+      const buffer = Buffer.from(
+        imagePart.inlineData.data,
+        'base64',
+      );
+
       if (!buffer.length) {
         throw new BadGatewayException('Gemini returned an empty image.');
       }
@@ -200,7 +227,7 @@ collage, split-screen, before/after comparison, or explanatory text.
       const extension = this.getFileExtension(mimeType);
 
       this.logger.log(
-        `Hairstyle generated. analysisModel=${analysisModelName}, imageModel=${imageModelName}, mimeType=${mimeType}, bytes=${buffer.length}`,
+        `Hairstyle generated. model=${imageModelName}, mimeType=${mimeType}, bytes=${buffer.length}`,
       );
 
       return {
@@ -217,15 +244,23 @@ collage, split-screen, before/after comparison, or explanatory text.
         throw error;
       }
 
-      const message = error instanceof Error ? error.message : String(error);
+      const message =
+        error instanceof Error ? error.message : String(error);
+
       this.logger.error(
-        `Gemini hairstyle generation failed. imageModel=${imageModelName}; ${message}`,
+        `Gemini hairstyle generation failed. model=${imageModelName}; ${message}`,
         error instanceof Error ? error.stack : undefined,
       );
 
       if (/429|quota|rate.?limit/i.test(message)) {
         throw new ServiceUnavailableException(
           'Gemini rate limit or quota exceeded. Please try again later.',
+        );
+      }
+
+      if (/404|not found|model/i.test(message)) {
+        throw new BadGatewayException(
+          `Gemini model "${imageModelName}" is unavailable for this API key. Check GEMINI_IMAGE_MODEL and model access.`,
         );
       }
 
